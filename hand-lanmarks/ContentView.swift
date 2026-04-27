@@ -29,29 +29,50 @@ private struct FingertipCameraRoot: View {
 
     var body: some View {
         ZStack {
-            CameraPreviewRepresentable(session: camera.session, previewLayerRef: $previewLayer)
+            CameraPreviewRepresentable(
+                session: camera.session,
+                previewLayerRef: $previewLayer
+            )
                 .ignoresSafeArea()
 
             GeometryReader { _ in
                 FingertipOverlay(
                     fingertipSets: processor.fingertipSets,
+                    cameraPosition: camera.cameraPosition,
                     previewLayer: previewLayer
                 )
             }
             .ignoresSafeArea()
 
             VStack {
-                Text("五指指尖识别（Vision）")
-                    .font(.headline)
-                    .padding(8)
-                    .background(.ultraThinMaterial, in: Capsule())
+                HStack {
+                    Text("五指指尖识别（Vision）")
+                        .font(.headline)
+                        .padding(8)
+                        .background(.ultraThinMaterial, in: Capsule())
+
+                    Spacer()
+
+                    Button {
+                        camera.switchCamera()
+                    } label: {
+                        Label(camera.switchButtonTitle, systemImage: "camera.rotate")
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.primary)
+                }
                 Spacer()
-                Text("将手掌朝向前置摄像头")
+                Text(camera.cameraInstruction)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .padding(.bottom, 24)
             }
             .padding(.top, 16)
+            .padding(.horizontal, 16)
         }
         .onAppear {
             camera.syncVideoOrientationWithInterface()

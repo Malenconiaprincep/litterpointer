@@ -4,6 +4,7 @@ import AVFoundation
 /// 把 Vision 归一化坐标映射到预览区域上的覆盖层。
 struct FingertipOverlay: View {
     let fingertipSets: [[[String: CGFloat]]]
+    let cameraPosition: AVCaptureDevice.Position
     /// 优先用预览层做坐标变换（含镜像、裁剪与宽高比）；为 nil 时退回纯数学映射。
     var previewLayer: AVCaptureVideoPreviewLayer?
 
@@ -52,17 +53,19 @@ struct FingertipOverlay: View {
         viewSize: CGSize,
         previewLayer: AVCaptureVideoPreviewLayer?
     ) -> CGPoint {
+        let isBackCamera = cameraPosition == .back
+        let nx = isBackCamera ? 1 - normalizedVision.x : normalizedVision.x
+        let metadataY = isBackCamera ? normalizedVision.y : 1 - normalizedVision.y
+
         guard let layer = previewLayer else {
-            let x = normalizedVision.x * viewSize.width
-            let y = (1 - normalizedVision.y) * viewSize.height
+            let x = nx * viewSize.width
+            let y = metadataY * viewSize.height
             return CGPoint(x: x, y: y)
         }
 
-        let nx = normalizedVision.x
-        let ny = normalizedVision.y
         let metadataRect = CGRect(
             x: nx,
-            y: 1 - ny,
+            y: metadataY,
             width: 0.002,
             height: 0.002
         )

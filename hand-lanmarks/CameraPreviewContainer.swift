@@ -6,9 +6,11 @@ import UIKit
 final class CameraSessionController: NSObject, ObservableObject {
     let session = AVCaptureSession()
     private let output = AVCaptureVideoDataOutput()
+    @Published private(set) var cameraPosition: AVCaptureDevice.Position = .front
     let processor = HandPoseProcessor()
 
     private let sessionQueue = DispatchQueue(label: "camera.session")
+    private var currentInput: AVCaptureDeviceInput?
 
     override init() {
         super.init()
@@ -40,21 +42,20 @@ final class CameraSessionController: NSObject, ObservableObject {
         let av = Self.interfaceVideoOrientation()
         sessionQueue.async { [weak self] in
             guard let self else { return }
-            if let conn = self.output.connection(with: .video), conn.isVideoOrientationSupported {
-                conn.videoOrientation = av
-            }
+            self.applyConnectionSettings(
+                videoOrientation: av,
+                cameraPosition: self.currentInput?.device.position ?? self.cameraPosition
+            )
         }
     }
 
     private func configureSession() {
         session.sessionPreset = .high
 
-        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front),
-              let input = try? AVCaptureDeviceInput(device: device),
-              session.canAddInput(input)
-        else { return }
+        guard let input = makeInput(for: .front), session.canAddInput(input) else { return }
 
         session.addInput(input)
+        currentInput = input
 
         output.videoSettings = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
@@ -65,15 +66,77 @@ final class CameraSessionController: NSObject, ObservableObject {
         guard session.canAddOutput(output) else { return }
         session.addOutput(output)
 
-        let av = Self.interfaceVideoOrientation()
-        if let conn = output.connection(with: .video) {
-            if conn.isVideoOrientationSupported {
-                conn.videoOrientation = av
+        applyConnectionSettings(videoOrientation: Self.interfaceVideoOrientation(), cameraPosition: .front)
+    }
+
+    var cameraInstruction: String {
+        switch cameraPosition {
+        case .front:
+            return "将手掌朝向前置摄像头"
+        case .back:
+            return "将手掌放在后置摄像头视野内"
+        default:
+            return "将手掌放在摄像头视野内"
+        }
+    }
+
+    var switchButtonTitle: String {
+        cameraPosition == .front ? "后置" : "前置"
+    }
+
+    func switchCamera() {
+        let target: AVCaptureDevice.Position = cameraPosition == .front ? .back : .front
+
+        sessionQueue.async { [weak self] in
+            guard let self, let nextInput = self.makeInput(for: target) else { return }
+
+            self.session.beginConfiguration()
+            if let currentInput = self.currentInput {
+                self.session.removeInput(currentInput)
             }
-            if conn.isVideoMirroringSupported {
-                conn.automaticallyAdjustsVideoMirroring = false
-                conn.isVideoMirrored = true
+
+            guard self.session.canAddInput(nextInput) else {
+                if let currentInput = self.currentInput, self.session.canAddInput(currentInput) {
+                    self.session.addInput(currentInput)
+                    self.applyConnectionSettings(
+                        videoOrientation: Self.interfaceVideoOrientation(),
+                        cameraPosition: currentInput.device.position
+                    )
+                }
+                self.session.commitConfiguration()
+                return
             }
+
+            self.session.addInput(nextInput)
+            self.currentInput = nextInput
+            self.applyConnectionSettings(videoOrientation: Self.interfaceVideoOrientation(), cameraPosition: target)
+            self.session.commitConfiguration()
+
+            DispatchQueue.main.async {
+                self.cameraPosition = target
+            }
+        }
+    }
+
+    private func makeInput(for position: AVCaptureDevice.Position) -> AVCaptureDeviceInput? {
+        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) else {
+            return nil
+        }
+        return try? AVCaptureDeviceInput(device: device)
+    }
+
+    private func applyConnectionSettings(
+        videoOrientation: AVCaptureVideoOrientation,
+        cameraPosition: AVCaptureDevice.Position
+    ) {
+        guard let conn = output.connection(with: .video) else { return }
+
+        if conn.isVideoOrientationSupported {
+            conn.videoOrientation = videoOrientation
+        }
+        if conn.isVideoMirroringSupported {
+            conn.automaticallyAdjustsVideoMirroring = false
+            conn.isVideoMirrored = cameraPosition == .front
         }
     }
 
@@ -101,7 +164,7 @@ extension CameraSessionController: AVCaptureVideoDataOutputSampleBufferDelegate 
     ) {
         let orientation = visionImageOrientation(
             videoOrientation: connection.videoOrientation,
-            cameraPosition: .front
+            cameraPosition: currentInput?.device.position ?? cameraPosition
         )
         processor.process(sampleBuffer: sampleBuffer, orientation: orientation)
     }
