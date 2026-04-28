@@ -8,33 +8,26 @@ struct FingertipOverlay: View {
     /// 优先用预览层做坐标变换（含镜像、裁剪与宽高比）；为 nil 时退回纯数学映射。
     var previewLayer: AVCaptureVideoPreviewLayer?
 
-    private let colors: [Color] = [
-        .red,
-        .green,
-        .blue,
-        .orange,
-        .purple,
-    ]
-
     var body: some View {
         Canvas { context, size in
             for (handIndex, tips) in fingertipSets.enumerated() {
-                for (i, tip) in tips.enumerated() {
+                for tip in tips {
                     guard
                         let nx = tip["x"],
                         let ny = tip["y"]
                     else { continue }
 
-                    let p = viewPoint(
+                    let p = CameraPreviewGeometry.viewPoint(
                         normalizedVision: CGPoint(x: nx, y: ny),
                         viewSize: size,
+                        cameraPosition: cameraPosition,
                         previewLayer: previewLayer
                     )
                     let radius: CGFloat = 10 + CGFloat(handIndex) * 2
 
                     context.fill(
                         Path(ellipseIn: CGRect(x: p.x - radius, y: p.y - radius, width: radius * 2, height: radius * 2)),
-                        with: .color(colors[i % colors.count].opacity(0.85))
+                        with: .color(Color.green.opacity(0.85))
                     )
                     context.stroke(
                         Path(ellipseIn: CGRect(x: p.x - radius, y: p.y - radius, width: radius * 2, height: radius * 2)),
@@ -45,31 +38,5 @@ struct FingertipOverlay: View {
             }
         }
         .allowsHitTesting(false)
-    }
-
-    /// Vision：归一化、原点在图像左下。Metadata / 预览层转换：原点在左上。
-    private func viewPoint(
-        normalizedVision: CGPoint,
-        viewSize: CGSize,
-        previewLayer: AVCaptureVideoPreviewLayer?
-    ) -> CGPoint {
-        let isBackCamera = cameraPosition == .back
-        let nx = isBackCamera ? 1 - normalizedVision.x : normalizedVision.x
-        let metadataY = isBackCamera ? normalizedVision.y : 1 - normalizedVision.y
-
-        guard let layer = previewLayer else {
-            let x = nx * viewSize.width
-            let y = metadataY * viewSize.height
-            return CGPoint(x: x, y: y)
-        }
-
-        let metadataRect = CGRect(
-            x: nx,
-            y: metadataY,
-            width: 0.002,
-            height: 0.002
-        )
-        let rectInLayer = layer.layerRectConverted(fromMetadataOutputRect: metadataRect)
-        return CGPoint(x: rectInLayer.midX, y: rectInLayer.midY)
     }
 }

@@ -6,10 +6,15 @@ import UIKit
 final class CameraSessionController: NSObject, ObservableObject {
     let session = AVCaptureSession()
     private let output = AVCaptureVideoDataOutput()
-    @Published private(set) var cameraPosition: AVCaptureDevice.Position = .front
+    @Published private(set) var cameraPosition: AVCaptureDevice.Position = .back
     let processor = HandPoseProcessor()
+    /// 正在对当前帧做整页 OCR。
+    @Published private(set) var isPageScanning = false
+    /// 扫描失败或未发现文字时的提示。
+    @Published private(set) var pageScanBanner: String?
 
     private let sessionQueue = DispatchQueue(label: "camera.session")
+    private var pendingPageScan = false
     private var currentInput: AVCaptureDeviceInput?
 
     override init() {
@@ -52,7 +57,7 @@ final class CameraSessionController: NSObject, ObservableObject {
     private func configureSession() {
         session.sessionPreset = .high
 
-        guard let input = makeInput(for: .front), session.canAddInput(input) else { return }
+        guard let input = makeInput(for: .back), session.canAddInput(input) else { return }
 
         session.addInput(input)
         currentInput = input
@@ -66,7 +71,7 @@ final class CameraSessionController: NSObject, ObservableObject {
         guard session.canAddOutput(output) else { return }
         session.addOutput(output)
 
-        applyConnectionSettings(videoOrientation: Self.interfaceVideoOrientation(), cameraPosition: .front)
+        applyConnectionSettings(videoOrientation: Self.interfaceVideoOrientation(), cameraPosition: .back)
     }
 
     var cameraInstruction: String {
@@ -114,8 +119,23 @@ final class CameraSessionController: NSObject, ObservableObject {
 
             DispatchQueue.main.async {
                 self.cameraPosition = target
+                self.processor.clearScannedPage()
+                self.pageScanBanner = nil
             }
         }
+    }
+
+    /// 抓取下一帧做 Vision 文字识别，生成可点读的区块与热区。
+    func requestPageScan() {
+        guard !pendingPageScan, !isPageScanning else { return }
+        pendingPageScan = true
+        isPageScanning = true
+        pageScanBanner = nil
+    }
+
+    func clearPageScan() {
+        processor.clearScannedPage()
+        pageScanBanner = nil
     }
 
     private func makeInput(for position: AVCaptureDevice.Position) -> AVCaptureDeviceInput? {
@@ -166,6 +186,42 @@ extension CameraSessionController: AVCaptureVideoDataOutputSampleBufferDelegate 
             videoOrientation: connection.videoOrientation,
             cameraPosition: currentInput?.device.position ?? cameraPosition
         )
+
+        if pendingPageScan {
+            pendingPageScan = false
+            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
+                  let copy = PixelBufferCopy.deepCopy(pixelBuffer)
+            else {
+                DispatchQueue.main.async {
+                    self.isPageScanning = false
+                    self.pageScanBanner = "无法复制画面，请重试"
+                }
+                processor.process(sampleBuffer: sampleBuffer, orientation: orientation)
+                return
+            }
+            let orient = orientation
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self else { return }
+                do {
+                    let blocks = try PageTextScanService.recognizeBlocks(pixelBuffer: copy, orientation: orient)
+                    DispatchQueue.main.async {
+                        self.processor.applyScannedBlocks(blocks)
+                        self.isPageScanning = false
+                        if blocks.isEmpty {
+                            self.pageScanBanner = "未识别到文字，请对准书页后重试"
+                        } else {
+                            self.pageScanBanner = nil
+                        }
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        self.isPageScanning = false
+                        self.pageScanBanner = error.localizedDescription
+                    }
+                }
+            }
+        }
+
         processor.process(sampleBuffer: sampleBuffer, orientation: orientation)
     }
 
